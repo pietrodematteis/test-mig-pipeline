@@ -24,12 +24,19 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          repository: "https://gitlab.fbk.eu/st/project/micro-id-gym/mig2.0/mig-saas.git"
-          ref: "r1.0"
-          submodules: recursive
-          token: ${{ secrets.PAT_TOKEN }}
 
+      - name: Clone MIG repo
+        env:
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+        run: |
+          git --version
+          # Use a shallow clone for speed; adjust branch/tag as needed.
+          git clone --depth 1 \
+            https://oauth2:${GITLAB_TOKEN}@gitlab.fbk.eu/st/project/micro-id-gym/mig2.0/mig-saas.git \
+            mig-saas
+          cd mig-saas
+          git fetch --depth=1 origin r1.0
+          
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
