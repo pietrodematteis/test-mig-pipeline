@@ -31,7 +31,7 @@ jobs:
         run: |
           git --version
           # Use a shallow clone for speed; adjust branch/tag as needed.
-          git clone -b 1.0 --recurse-submodules https://oauth2:${{ secrets.GITLAB_TOKEN }}@gitlab.fbk.eu/st/project/micro-id-gym/mig2.0/mig-saas.git \
+          git clone -b 1.0 --recurse-submodules https://oauth2:${{ env.GITLAB_TOKEN }}@gitlab.fbk.eu/st/project/micro-id-gym/mig2.0/mig-saas.git \
             mig-saas
           cd mig-saas
           ls -la
