@@ -51,7 +51,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: ./mig-saas
-          file: ./conf/backend/Dockerfile
+          file: ./mig-saas/conf/backend/Dockerfile
           push: false
           load: true
           tags: bluetensor/mig-backend:20250915merge
