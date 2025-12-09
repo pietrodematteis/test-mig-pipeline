@@ -21,7 +21,9 @@ jobs:
     environment: MIG
     permissions:
       contents: read
-
+    defaults:
+      run:
+        working-directory: ./mig-saas
     steps:
       #- name: Checkout code
       #  uses: actions/checkout@v4
