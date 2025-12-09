@@ -27,7 +27,7 @@ jobs:
 
       - name: Clone MIG repo
         env:
-          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+          GITLAB_TOKEN: ${{ secrets.MIG_TOKEN }}
         run: |
           git --version
           # Use a shallow clone for speed; adjust branch/tag as needed.
