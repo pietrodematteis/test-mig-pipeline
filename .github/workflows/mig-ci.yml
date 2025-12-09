@@ -29,7 +29,7 @@ jobs:
         run: |
           git --version
           # Use a shallow clone for speed; adjust branch/tag as needed.
-          git clone -b 1.0 https://oauth2:${{ secrets.MIG_TOKEN }}@gitlab.fbk.eu/st/project/micro-id-gym/mig2.0/mig-saas.git \
+          git clone -b 1.0 https://pdematteis:${{ secrets.MIG_TOKEN }}@gitlab.fbk.eu/st/project/micro-id-gym/mig2.0/mig-saas.git \
             mig-saas
           cd mig-saas
           ls -la
