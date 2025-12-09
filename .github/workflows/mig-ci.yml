@@ -21,9 +21,11 @@ jobs:
     environment: MIG
     permissions:
       contents: read
+    
     defaults:
       run:
         working-directory: ./mig-saas
+  
     steps:
       #- name: Checkout code
       #  uses: actions/checkout@v4
@@ -37,7 +39,8 @@ jobs:
           git submodule sync --recursive
           git submodule update --init --recursive
           ls -la
-          working-directory: ./mig-saas
+        working-directory: .
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
