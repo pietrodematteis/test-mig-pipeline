@@ -50,7 +50,7 @@ jobs:
       - name: Build backend with cache
         uses: docker/build-push-action@v5
         with:
-          context: ./mig-saas/
+          context: ./mig-saas
           file: ./conf/backend/Dockerfile
           push: false
           load: true
