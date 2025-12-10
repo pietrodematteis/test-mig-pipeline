@@ -92,27 +92,16 @@ jobs:
           User = get_user_model();
           User.objects.filter(username='admin').exists() or User.objects.create_superuser('admin', 'admin@example.com', 'admin123')
           "
-
-          #TOKEN=$(curl -s -X POST http://localhost:${{ env.BACKEND_PORT }}/api/token/ \
-          #  -H "Content-Type: application/json" \
-          #  -d '{"username":"admin","password":"admin123"}' | grep -o '"access":"[^"]*' | cut -d'"' -f4)
-          #####
-          # Request token and parse safely with jq
           RESP=$(curl -s -w "\nSTATUS:%{http_code}\n" -X POST http://localhost:8100/api/token/ \
             -H "Content-Type: application/json" \
             -d '{"username":"admin","password":"admin123"}')
-          
-          echo "$RESP"
-          
           echo "$RESP"
           STATUS=$(echo "$RESP" | awk -F: '/STATUS/ {print $2}')
           TOKEN=$(echo "$RESP" | jq -r '.access // empty')
-          
           if [[ "$STATUS" != "200" ]]; then
             echo "Token endpoint returned status $STATUS"
             exit 1
           fi
-          #####
           [[ -z "$TOKEN" ]] && echo "Failed to get authentication token" && exit 1
 
           SUITES=$(curl -s http://localhost:${{ env.BACKEND_PORT }}/api/suites/ -H "Authorization: Bearer $TOKEN")
