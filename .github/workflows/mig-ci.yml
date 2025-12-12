@@ -69,7 +69,7 @@ jobs:
         run: |
           docker compose -f docker-compose-local-template.yml up -d postgres backend
           timeout 120 bash -c 'until curl -s http://localhost:${{ env.BACKEND_PORT }}/health || curl -s http://localhost:${{ env.BACKEND_PORT }}; do sleep 5; done' || true
-          docker-compose ps -a
+          docker compose ps -a
           
       - name: Deploy cluster service to Kubernetes
         run: |
