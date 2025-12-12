@@ -27,9 +27,6 @@ jobs:
         working-directory: ./mig-saas
       
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      
       - name: Clone MIG repo
         run: |
           git --version    
@@ -41,6 +38,9 @@ jobs:
           ls -la
         working-directory: .
 
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
