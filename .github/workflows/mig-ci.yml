@@ -27,8 +27,12 @@ jobs:
         working-directory: ./mig-saas
       
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
       - name: Clone MIG repo
         run: |
+          ls -la
           git --version    
           git clone -b r1.0 https://${{ secrets.REPO_USER }}:${{ secrets.MIG_TOKEN }}@gitlab.fbk.eu/st/project/micro-id-gym/mig2.0/mig-saas.git mig-saas
           cd mig-saas
@@ -37,9 +41,6 @@ jobs:
           git submodule update --init --recursive
           ls -la
         working-directory: .
-
-      - name: Checkout code
-        uses: actions/checkout@v4
       
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
