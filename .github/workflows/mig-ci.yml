@@ -25,7 +25,8 @@ jobs:
     defaults:
       run:
         working-directory: ./mig-saas
-  
+      working-directory: .
+      
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
