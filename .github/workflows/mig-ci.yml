@@ -41,6 +41,7 @@ jobs:
           git submodule update --init --recursive
           cp -a ../.github ./.github
           cp -a ../rp-bootstrap ./rp-bootstrap
+          chmod +x ./rp-bootstrap/bootstrap.sh
           ls -la
         working-directory: .
       
