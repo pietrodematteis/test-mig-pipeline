@@ -1,0 +1,48 @@
+volumes:
+  examples:
+  override:
+services:
+  rp-bootstrap:
+    image: alpine:3.19
+    container_name: rp-bootstrap
+    environment:
+      # Public endpoints you want baked into the examples
+      TA_BASE: "${TA_BASE:-http://ta-hp6cp1fk91.192.168.1.5.nip.io}"
+      RP_BASE: "${RP_BASE:-http://192.168.1.5:8001}"
+      OP_BASE: "${OP_BASE:-http://op-hp6cp1fk91.192.168.1.5.nip.io}"
+      WTA_BASE: "${WTA_BASE:-http://wta-acme.migcloud.bluetensor.ai}"
+      # Optional settings for HTTP client used by the RP
+      HTTPC_TIMEOUT_TOTAL: "${HTTPC_TIMEOUT_TOTAL:-30}"
+    entrypoint: [ "sh", "-lc" ]
+    command: "/usr/local/bin/bootstrap.sh"
+    volumes:
+      - ./bootstrap.sh:/usr/local/bin/bootstrap.sh:ro
+      - examples:/opt/examples
+      - override:/opt/override
+    # Run once to prepare shared volumes, then exit
+    restart: "no"
+  rp:
+    image: ghcr.io/italia/spid-cie-oidc-django:latest
+    container_name: rp
+    network_mode: host
+    depends_on:
+      rp-bootstrap:
+        condition: service_completed_successfully
+    environment:
+      PYTHONPATH: "/opt/override:${PYTHONPATH}"
+      # Explicitly include rp-test (not under *.migcloud.*) plus the others
+      DJANGO_ALLOWED_HOSTS: "*"
+      USE_X_FORWARDED_HOST: "true"
+      HTTPC_TIMEOUT_TOTAL: "${HTTPC_TIMEOUT_TOTAL:-30}"
+    command: >
+      bash -lc "
+        set -euo pipefail;
+        cd /opt/examples/relying_party;
+        python3 manage.py migrate;
+        python3 manage.py loaddata dumps/example.json || true;
+        python3 manage.py runserver 0.0.0.0:8001
+      "
+    volumes:
+      - examples:/opt/examples
+      - override:/opt/override
+    restart: unless-stopped
