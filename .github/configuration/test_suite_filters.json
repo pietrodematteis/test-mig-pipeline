@@ -9,7 +9,7 @@
   },
   "profile": null,
   "implementation": null,
-  "type_test": "passive",
+  "type_test": null,
   "severity": null,
   "cases": null,
   "entities_under_test": null,
