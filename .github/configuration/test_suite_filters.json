@@ -1,12 +1,17 @@
 {
   "_comment": "Configurazione dei filtri per la creazione della suite di test in CI. Tutti i filtri sono opzionali - impostare a null per includere tutti.",
   "_available_values": {
-    "type_test": ["Active", "Passive"],
+    "profile": ["OIDC_FEDERATION", "OIDC_CORE"],
+    "type_test": ["active", "passive"],
     "severity": ["L", "M", "H"],
+    "cases": ["FED", "IT"],
     "entities_under_test": ["OP", "RP", "TA_SA"]
   },
-  "type_test": "Passive",
+  "profile": null,
+  "implementation": null,
+  "type_test": "passive",
   "severity": null,
+  "cases": null,
   "entities_under_test": null,
   "limit": 10,
   "exclude_test_ids": []
