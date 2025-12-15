@@ -1,0 +1,13 @@
+{
+  "_comment": "Configurazione dei filtri per la creazione della suite di test in CI. Tutti i filtri sono opzionali - impostare a null per includere tutti.",
+  "_available_values": {
+    "type_test": ["Active", "Passive"],
+    "severity": ["L", "M", "H"],
+    "entities_under_test": ["OP", "RP", "TA_SA"]
+  },
+  "type_test": "Passive",
+  "severity": null,
+  "entities_under_test": null,
+  "limit": 10,
+  "exclude_test_ids": []
+}
