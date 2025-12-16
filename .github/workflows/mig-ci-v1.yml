@@ -203,9 +203,29 @@ jobs:
           echo "Starting test suite to create pods..."
 
           # Trigger the test suite to create pods
-          curl -s -X POST http://localhost:${{ env.BACKEND_PORT }}/api/suite/${{ env.SUITE_ID }}/run/ \
+          RESPONSE=$(curl -s -w "\nHTTP_CODE:%{http_code}" -X POST http://localhost:${{ env.BACKEND_PORT }}/api/suite/${{ env.SUITE_ID }}/run/ \
             -H "Authorization: Bearer ${{ env.AUTH_TOKEN }}" \
-            -H "Content-Type: application/json"
+            -H "Content-Type: application/json")
+          
+          HTTP_CODE=$(echo "$RESPONSE" | grep "HTTP_CODE:" | cut -d: -f2)
+          BODY=$(echo "$RESPONSE" | sed '/HTTP_CODE:/d')
+          
+          echo "Response HTTP code: $HTTP_CODE"
+          echo "Response body: $BODY"
+          
+          if [[ "$HTTP_CODE" != "204" ]]; then
+            echo "ERROR: Suite run returned HTTP $HTTP_CODE instead of 204"
+            echo ""
+            echo "=== Checking cluster-service logs (last 100 lines) ==="
+            kubectl logs -n mig-cluster-service -l app=mig-cluster-service --tail=100 || echo "Could not get cluster-service logs"
+            echo ""
+            echo "=== Checking cluster-service pod status ==="
+            kubectl get pods -n mig-cluster-service -l app=mig-cluster-service || echo "Could not get cluster-service pod status"
+            echo ""
+            echo "=== Checking cluster-service pod events ==="
+            kubectl describe pod -n mig-cluster-service -l app=mig-cluster-service | tail -50 || echo "Could not get cluster-service pod events"
+            exit 1
+          fi
 
           echo "Waiting for mig-t pod to be created..."
           sleep 10
@@ -333,6 +353,53 @@ jobs:
 
             echo -e "\n=== Checking OP pod status ==="
             kubectl get pods -n "${{ env.MIG_T_NAMESPACE }}" -l app=op || echo "No OP pods found"
+            
+            echo -e "\n=== Checking mig-t pod status ==="
+            kubectl get pods -n "${{ env.MIG_T_NAMESPACE }}" -l app=mig-t || echo "No mig-t pods found"
+            
+            echo -e "\n=== Checking mig-t pod logs (last 50 lines) ==="
+            MIG_T_POD=$(kubectl get pods -n "${{ env.MIG_T_NAMESPACE }}" -l app=mig-t -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+            if [[ -n "$MIG_T_POD" ]]; then
+              kubectl logs -n "${{ env.MIG_T_NAMESPACE }}" "$MIG_T_POD" --tail=50 || echo "Failed to get mig-t logs"
+            else
+              echo "No mig-t pod found to check logs"
+            fi
+          fi
+          
+          # Check if tests have any results
+          echo -e "\n=== Checking test status ==="
+          docker exec mig_backend python manage.py shell -c "
+          from migapi.models import Suite, Test
+          import sys
+          try:
+              suite = Suite.objects.get(pk=${{ env.SUITE_ID }})
+              tests = suite.tests.all()
+              print(f'Total tests: {tests.count()}')
+              statuses = {}
+              for test in tests:
+                  status = test.status
+                  statuses[status] = statuses.get(status, 0) + 1
+              print('Test statuses:')
+              for status, count in statuses.items():
+                  print(f'  {status}: {count}')
+              results_count = sum(1 for t in tests if t.results)
+              print(f'Tests with results: {results_count}/{tests.count()}')
+          except Exception as e:
+              print(f'Error: {e}', file=sys.stderr)
+              sys.exit(1)
+          "
+          
+          # Check if backend is reachable from Kubernetes
+          echo -e "\n=== Testing backend connectivity from Kubernetes ==="
+          if [[ -n "${{ env.MIG_T_NAMESPACE }}" ]]; then
+            MIG_T_POD=$(kubectl get pods -n "${{ env.MIG_T_NAMESPACE }}" -l app=mig-t -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+            if [[ -n "$MIG_T_POD" ]]; then
+              echo "Testing connection to backend from mig-t pod..."
+              kubectl exec -n "${{ env.MIG_T_NAMESPACE }}" "$MIG_T_POD" -c mig-t -- sh -c "curl -s -o /dev/null -w '%{http_code}' --connect-timeout 5 http://${{ env.NODE_IP }}:${{ env.BACKEND_PORT }}/health/ || echo 'Connection failed'" || echo "Could not test connectivity"
+              
+              echo "Checking MIGSAAS_BASE_URL environment variable in mig-t pod..."
+              kubectl exec -n "${{ env.MIG_T_NAMESPACE }}" "$MIG_T_POD" -c mig-t -- env | grep MIGSAAS || echo "MIGSAAS_BASE_URL not found in environment"
+            fi
           fi
 
       - name: Print test results
@@ -405,10 +472,12 @@ jobs:
             exit 0
           fi
 
-          # Download PDF and save HTTP status
+          # Download PDF and save HTTP status (endpoint requires POST method)
           HTTP_STATUS=$(curl -s -w "%{http_code}" -o artifacts/suite_report.pdf \
-            http://localhost:${{ env.BACKEND_PORT }}/api/suite/${{ env.SUITE_ID }}/download/ \
-            -H "Authorization: Bearer ${{ env.AUTH_TOKEN }}")
+            -X POST http://localhost:${{ env.BACKEND_PORT }}/api/suite/${{ env.SUITE_ID }}/download/ \
+            -H "Authorization: Bearer ${{ env.AUTH_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d '{}')
 
           echo "HTTP status: $HTTP_STATUS"
 
