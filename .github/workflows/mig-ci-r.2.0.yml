@@ -1,10 +1,7 @@
 name: CI - Build and Deploy r 2.0
 
 on:
-  push:
-    branches: [main, development, merge-all]
-  pull_request:
-    branches: [main, development]
+  workflow_dispatch:
 
 env:
   NODE_IP: 127.0.0.1
