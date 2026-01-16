@@ -27,8 +27,7 @@ jobs:
         run: |
           ls -la
           git --version    
-          git clone -b r2.0 https://${{ secrets.REPO_USER }}:${{ secrets.MIG_TOKEN }}@gitlab.fbk.eu/st/project/micro-id-gym/mig2.0/mig-saas.git mig-saas
-          cd mig-saas
+          git clone -b r2.0 https://${{ secrets.REPO_USER }}:${{ secrets.MIG_TOKEN }}@gitlab.fbk.eu/st/project/micro-id-gym/mig2.0/mig-saas.git .
           git config --global url."https://${{ secrets.REPO_USER }}:${{ secrets.MIG_TOKEN }}@gitlab.fbk.eu/".insteadOf "git@gitlab.fbk.eu:"
           git submodule sync --recursive
           git submodule update --init --recursive
