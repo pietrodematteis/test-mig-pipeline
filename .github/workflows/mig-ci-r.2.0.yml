@@ -1,0 +1,540 @@
+name: CI - Build and Deploy r 2.0
+
+on:
+  push:
+    branches: [main, development, merge-all]
+  pull_request:
+    branches: [main, development]
+
+env:
+  NODE_IP: 127.0.0.1
+  POSTGRES_PASSWORD: postgres123
+  SECRET_KEY: django-insecure-ci-test-key
+  JWT_SIGNING_KEY: ci-jwt-signing-key
+  EMAIL_HOST_USER: test@example.com
+  EMAIL_HOST_PASSWORD: test_password
+  BACKEND_PORT: 8100
+  FRONTEND_PORT: 3000
+  POSTGRES_PORT: 5432
+  KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    environment: MIG
+    permissions:
+      contents: read
+
+    steps:
+      - name: Clone MIG repo
+        run: |
+          ls -la
+          git --version    
+          git clone -b r2.0 https://${{ secrets.REPO_USER }}:${{ secrets.MIG_TOKEN }}@gitlab.fbk.eu/st/project/micro-id-gym/mig2.0/mig-saas.git mig-saas
+          cd mig-saas
+          git config --global url."https://${{ secrets.REPO_USER }}:${{ secrets.MIG_TOKEN }}@gitlab.fbk.eu/".insteadOf "git@gitlab.fbk.eu:"
+          git submodule sync --recursive
+          git submodule update --init --recursive
+          ls -la
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Install and configure k3s
+        run: |
+          curl -sfL https://get.k3s.io | sh -s - --write-kubeconfig-mode 644 --disable metrics-server
+          timeout 60 bash -c 'until kubectl get nodes; do sleep 2; done'
+          kubectl wait --for=condition=Ready node --all --timeout=60s
+          NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
+          echo "NODE_IP=$NODE_IP" >> $GITHUB_ENV
+
+      - name: Build backend with cache
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./conf/backend/Dockerfile
+          push: false
+          load: true
+          tags: bluetensor/mig-backend:20250915merge
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+
+      - name: Start Docker Compose services
+        env:
+          LOAD_FIXTURES: 1
+        run: |
+          docker compose -f docker-compose-local-template.yml up -d postgres backend
+          timeout 120 bash -c 'until curl -s http://localhost:${{ env.BACKEND_PORT }}/health || curl -s http://localhost:${{ env.BACKEND_PORT }}; do sleep 5; done' || true
+
+      - name: Deploy cluster service to Kubernetes
+        run: |
+          if [[ ! -d "mig-cluster-service" ]] || [[ ! -f "mig-cluster-service/local-setup.sh" ]]; then
+            echo "ERROR: mig-cluster-service directory or local-setup.sh not found"
+            exit 1
+          fi
+
+          export SAAS_PORT=${{ env.BACKEND_PORT }}
+          cd mig-cluster-service && bash local-setup.sh && cd ..
+
+          kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=traefik -n kube-system --timeout=120s || true
+          kubectl wait --for=condition=ready pod -l app=mig-cluster-service -n mig-cluster-service --timeout=120s || true
+
+      - name: Create test suite
+        run: |
+          timeout 180 bash -c 'until docker logs mig_backend 2>&1 | grep -q "Starting development server"; do sleep 3; done'
+
+          docker exec mig_backend python manage.py shell -c "
+          from django.contrib.auth import get_user_model;
+          User = get_user_model();
+          User.objects.filter(username='admin').exists() or User.objects.create_superuser('admin', 'admin@example.com', 'admin123')
+          "
+
+          TOKEN=$(curl -s -X POST http://localhost:${{ env.BACKEND_PORT }}/api/token/ \
+            -H "Content-Type: application/json" \
+            -d '{"username":"admin","password":"admin123"}' | grep -o '"access":"[^"]*' | cut -d'"' -f4)
+
+          [[ -z "$TOKEN" ]] && echo "Failed to get authentication token" && exit 1
+
+          SUITES=$(curl -s http://localhost:${{ env.BACKEND_PORT }}/api/suites/ -H "Authorization: Bearer $TOKEN")
+          SUITE_ID=$(echo "$SUITES" | grep -o '"id":[0-9]*' | head -1 | cut -d':' -f2)
+
+          if [[ -z "$SUITE_ID" ]]; then
+            echo "Creating test suite using Django management commands..."
+
+            # Create temporary configuration files
+            cat > /tmp/rp_config.json <<EOF
+          {
+            "protocol_selection": "oidfed",
+            "oidfed_implementation": "oidc_spid_cie_django",
+            "entity_selection": "relying_party",
+            "relying_party_config": {
+              "organization_name": "CI Test Organization",
+              "entity_url": "http://${NODE_IP}:8001",
+              "url_login_page": "http://${NODE_IP}:8001/oidc/rp/landing",
+              "contact_email": "ci-test@bluetensor.ai",
+              "public_federation_jwks": "[{\"kty\": \"RSA\", \"e\": \"AQAB\", \"n\": \"6SDksa64IjBk7HNQC7x5C9nMARGaanfaUm3wC2WulwG_8a5aIy4CEwXN2LENkCyypODqWZcTAwCzWsiihVN9kDcEs7UNu-X1WokK252D7_DRY-FXI8AB3P0CxTngs0k-OjcmbxqVW2U8G56rJFp4G_CYA4vzBoAP_5skFBt-4a5lYJlBfJ2gJlE0vh4_46oyNuUT9kmKauR7npVSHjBUSxYyDELzoaPmvR7SkX4sJe0MK39HES6s4no9G7BraLp75eOwEQmHgEhESWscSOf_CmC5ALnzWJ3FcFhxgsuMkdjoU7bH09y8pdKs64kR2znxs-yIWrPFW8hJKnySc2fk8w\", \"kid\": \"wL_LmP8UjLVN-sAeoZ7KGEMJfBkFtbNLd24eDD9RGCs\"}]",
+              "x_key": "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA6SDksa64IjBk7HNQC7x5C9nMARGaanfaUm3wC2WulwG/8a5a\nIy4CEwXN2LENkCyypODqWZcTAwCzWsiihVN9kDcEs7UNu+X1WokK252D7/DRY+FX\nI8AB3P0CxTngs0k+OjcmbxqVW2U8G56rJFp4G/CYA4vzBoAP/5skFBt+4a5lYJlB\nfJ2gJlE0vh4/46oyNuUT9kmKauR7npVSHjBUSxYyDELzoaPmvR7SkX4sJe0MK39H\nES6s4no9G7BraLp75eOwEQmHgEhESWscSOf/CmC5ALnzWJ3FcFhxgsuMkdjoU7bH\n09y8pdKs64kR2znxs+yIWrPFW8hJKnySc2fk8wIDAQABAoIBADacNfZJb2jS3VFm\nUcHuDIzyIA/AB+QY31Of3TNORm+pQUVkCkljZaj/GxE/qGW1ksN8zGjgMtvpNhp2\nFVwWCrvVp4xRRT5Wx/rFT33SkC2MxAAZsUf2mnkh65w3yqM07RbGBILSP1qBhGsT\n6BND/g7NdU6fYfaL2TOPLAxpxHco6KZyzxGQUelYpz/8hdZHw4NJHCD5jNWXISKi\na50KaClnlU17RRRq1ajgGJpuMQXz+FPExIpm3iSbmJCfYCzZ0Q4PxQvmT1IgSF4o\nFmbBHicnr8pj/jR+Jat6LC4BTqtLKj8Ut85A8MfbVn0+VMqqwgqK7YkHdncSs8WZ\nRBL5UAECgYEA+1JcdcT2FdwavmPqtfOEKFUGBM9hhvwgX7KyCwl8tmresJQz8pND\nkILMeKJf8ZCDVU7v4/i4C/P8oe41f2/SDsv9AIYh09zu/tQsMMdH/lqNx0YP8Yv2\n5N5KOxnSOBO837SieFZ2xkbolXXIV7WIHrdFiyAOMOSWlETEO6JNu/MCgYEA7XfV\nt4ArSMLmRvvSl11yDF25t1aR3ylUmwZgLAJTNo76j+zo8Q2Ty7GfCIQmLOhOZTkw\nqnrbmwEBMEBsomWZFh/j90CLMyn1ccYUjiTI4CHJOTLMA8rYVWeArYkqek1jC4TQ\n9e1PkRrPcEvq2Tak8GFsBhnhOCzejJrMDgqkcwECgYBOt5JMNN/bIvChd4w5Z0ea\nll7nPMlQTUIal07a1CLixAByEElhDi0YY0+F7V3dvKTWIH5Uyj9jRw127rSE8NI7\nXjslYd3QjR+yY2Rf9tse2OAVbWVrA6rWLqXTcxf8BnqfGuXUiUh0fBs3TQfuKOa0\nsDSxCd5IBCEB2bQY9ZIhbwKBgQC6XfQiwbo2ro9fYj9SgAoD3oLkelKdW6iEyios\nH98C0I+g6QOgO1Gk6U+wtVXopKDyHEIvaaB0NAOkxMr9YNMWZAzbfZJBo0p38kcr\nj37/OETeWRl4WHgT/tkkWKQ3vAhhf+knOQnbDbmDnnE/6/zikvLeju0M01oN62b+\nFigeAQKBgGbhr8UI35VkY3ym6qc9qvbh8MzEt4mI85bFmohJNw2EbfgbGVTO+5zg\nUo6Xe2WhCVCY6KFoJUaSuuwTBzq82bpIdpafusAIN51zQ+A1zmnuj5YYKb7G4DCg\nEB8HDc3EmeMKhyIh+5hV+bBnK7PVJdrIw7AxDqABKdOOo1F7vxcF\n-----END RSA PRIVATE KEY-----"
+            }
+          }
+          EOF
+
+            docker cp /tmp/rp_config.json mig_backend:/tmp/rp_config.json
+            docker cp .github/configuration/test_suite_filters.json mig_backend:/tmp/test_suite_filters.json
+
+            # Create suite with all tests, sessions, and messages in one command
+            SUITE_OUTPUT=$(docker exec mig_backend python manage.py create_full_suite "CI_TEST_SUITE" "CI Integration Test Suite" \
+              --description "Automated test suite created with filtered tests from backend fixtures" \
+              --filter_messages \
+              --configurations /tmp/rp_config.json \
+              --filters /tmp/test_suite_filters.json \
+              --replace-rp-url "http://${NODE_IP}:8001" 2>&1)
+
+            echo "$SUITE_OUTPUT"
+
+            SUITE_ID=$(echo "$SUITE_OUTPUT" | grep -o 'Suite ID: [0-9]*' | grep -o '[0-9]*$')
+
+            [[ -z "$SUITE_ID" ]] && echo "Failed to create suite" && exit 1
+
+            echo "Suite created successfully with ID: $SUITE_ID"
+
+          else
+            echo "Using existing suite with ID: $SUITE_ID"
+          fi
+
+          echo "SUITE_ID=$SUITE_ID" >> $GITHUB_ENV
+          echo "AUTH_TOKEN=$TOKEN" >> $GITHUB_ENV
+
+      - name: Deploy external RP
+        run: |
+          # Get the suite unique_id to determine the namespace
+          SUITE_UNIQUE_ID=$(curl -s http://localhost:${{ env.BACKEND_PORT }}/api/suite/${{ env.SUITE_ID }}/ \
+            -H "Authorization: Bearer ${{ env.AUTH_TOKEN }}" | grep -o '"unique_id":"[^"]*' | cut -d'"' -f4)
+
+          NAMESPACE=$(echo "$SUITE_UNIQUE_ID" | tr '[:upper:]' '[:lower:]')
+
+          echo "Suite unique_id: $SUITE_UNIQUE_ID"
+          echo "Suite namespace: $NAMESPACE"
+          echo "NODE_IP: ${{ env.NODE_IP }}"
+
+          # Configure TA and OP URLs based on the namespace and NODE_IP
+          TA_URL="http://ta-${NAMESPACE}.${{ env.NODE_IP }}.nip.io"
+          OP_URL="http://op-${NAMESPACE}.${{ env.NODE_IP }}.nip.io"
+          RP_URL="http://${{ env.NODE_IP }}:8001"
+
+          echo "TA_BASE: $TA_URL"
+          echo "OP_BASE: $OP_URL"
+          echo "RP_BASE: $RP_URL"
+
+          # Deploy RP with bootstrap - use host network to access k3s services
+          cd rp-bootstrap
+
+          TA_BASE="$TA_URL" \
+          RP_BASE="$RP_URL" \
+          OP_BASE="$OP_URL" \
+          WTA_BASE="http://wta-acme.migcloud.bluetensor.ai" \
+          docker compose up -d
+
+          # Wait for RP container to start (but it will fail initially since TA/OP don't exist yet)
+          echo "Waiting for RP container to start..."
+          sleep 10
+
+          echo "RP container deployed (will need restart after TA/OP are ready)"
+
+          # Check RP configuration
+          echo "=== Checking RP configuration ==="
+          echo -e "\n=== Checking example.json content ==="
+          echo "=== FULL example.json ==="
+          docker exec rp cat /opt/examples/relying_party/dumps/example.json | python3 -m json.tool || true
+          echo -e "\n=== End of example.json ==="
+
+          echo -e "\n=== Checking for problematic TA URLs in example.json ==="
+          docker exec rp cat /opt/examples/relying_party/dumps/example.json | grep -o '"http://[^"]*oidc/op[^"]*"' || echo "No problematic URLs found"
+
+      - name: Start test suite and create pods
+        run: |
+          echo "Starting test suite to create pods..."
+
+          # Trigger the test suite to create pods
+          RESPONSE=$(curl -s -w "\nHTTP_CODE:%{http_code}" -X POST http://localhost:${{ env.BACKEND_PORT }}/api/suite/${{ env.SUITE_ID }}/run/ \
+            -H "Authorization: Bearer ${{ env.AUTH_TOKEN }}" \
+            -H "Content-Type: application/json")
+          
+          HTTP_CODE=$(echo "$RESPONSE" | grep "HTTP_CODE:" | cut -d: -f2)
+          BODY=$(echo "$RESPONSE" | sed '/HTTP_CODE:/d')
+          
+          echo "Response HTTP code: $HTTP_CODE"
+          echo "Response body: $BODY"
+          
+          if [[ "$HTTP_CODE" != "204" ]]; then
+            echo "ERROR: Suite run returned HTTP $HTTP_CODE instead of 204"
+            echo ""
+            echo "=== Checking cluster-service logs (last 100 lines) ==="
+            kubectl logs -n mig-cluster-service -l app=mig-cluster-service --tail=100 || echo "Could not get cluster-service logs"
+            echo ""
+            echo "=== Checking cluster-service pod status ==="
+            kubectl get pods -n mig-cluster-service -l app=mig-cluster-service || echo "Could not get cluster-service pod status"
+            echo ""
+            echo "=== Checking cluster-service pod events ==="
+            kubectl describe pod -n mig-cluster-service -l app=mig-cluster-service | tail -50 || echo "Could not get cluster-service pod events"
+            exit 1
+          fi
+
+          echo "Waiting for mig-t pod to be created..."
+          sleep 10
+
+          MIG_T_NAMESPACE=$(kubectl get pods --all-namespaces | grep mig-t | awk '{print $1}' | head -1)
+
+          if [[ -n "$MIG_T_NAMESPACE" ]]; then
+            echo "Found mig-t in namespace: $MIG_T_NAMESPACE"
+
+            # Wait for all pods to be ready
+            kubectl wait --for=condition=ready pod -l app=mig-t -n "$MIG_T_NAMESPACE" --timeout=180s 2>&1 || true
+            kubectl wait --for=condition=ready pod -l app=ta -n "$MIG_T_NAMESPACE" --timeout=180s 2>&1 || true
+            kubectl wait --for=condition=ready pod -l app=op -n "$MIG_T_NAMESPACE" --timeout=180s 2>&1 || true
+
+            echo "=== All pods ready in namespace $MIG_T_NAMESPACE ==="
+            kubectl get pods -n "$MIG_T_NAMESPACE"
+
+            echo "MIG_T_NAMESPACE=$MIG_T_NAMESPACE" >> $GITHUB_ENV
+          fi
+
+      - name: Verify infrastructure readiness
+        run: |
+          if [[ -z "${{ env.MIG_T_NAMESPACE }}" ]]; then
+            echo "No mig-t namespace found, skipping verification"
+            exit 0
+          fi
+
+          # Get the suite unique_id for URLs
+          SUITE_UNIQUE_ID=$(curl -s http://localhost:${{ env.BACKEND_PORT }}/api/suite/${{ env.SUITE_ID }}/ \
+            -H "Authorization: Bearer ${{ env.AUTH_TOKEN }}" | grep -o '"unique_id":"[^"]*' | cut -d'"' -f4)
+          NAMESPACE=$(echo "$SUITE_UNIQUE_ID" | tr '[:upper:]' '[:lower:]')
+          TA_URL="http://ta-${NAMESPACE}.${{ env.NODE_IP }}.nip.io"
+          OP_URL="http://op-${NAMESPACE}.${{ env.NODE_IP }}.nip.io"
+
+          echo "=== Verifying infrastructure readiness ==="
+          echo "TA URL: $TA_URL"
+          echo "OP URL: $OP_URL"
+          echo "RP URL: http://${{ env.NODE_IP }}:8001"
+
+          # Wait for TA and OP federation endpoints to be accessible
+          echo -e "\n=== Waiting for TA federation endpoint ==="
+          for i in {1..30}; do
+            TA_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$TA_URL/.well-known/openid-federation" || echo "000")
+            echo "TA Status: $TA_STATUS (attempt $i/30)"
+            [[ "$TA_STATUS" == "200" ]] && break
+            sleep 2
+          done
+
+          echo -e "\n=== Waiting for OP federation endpoint ==="
+          for i in {1..30}; do
+            OP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$OP_URL/oidc/op/.well-known/openid-federation" || echo "000")
+            echo "OP Status: $OP_STATUS (attempt $i/30)"
+            [[ "$OP_STATUS" == "200" ]] && break
+            sleep 2
+          done
+
+          # Verify RP is ready
+          echo -e "\n=== Verifying RP is ready ==="
+          for i in {1..30}; do
+            RP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8001/oidc/rp/landing 2>/dev/null || echo "000")
+            echo "RP landing page status: $RP_STATUS (attempt $i/30)"
+            if [[ "$RP_STATUS" == "200" ]]; then
+              echo "RP is ready!"
+              break
+            fi
+            sleep 2
+          done
+
+          # echo -e "\n=== Testing RP landing page ==="
+          # curl -s http://localhost:8001/oidc/rp/landing | head -50 || true
+
+          # echo -e "\n=== Testing TA entity configuration endpoint ==="
+          # curl -s "$TA_URL/.well-known/openid-federation" | python3 -m json.tool | head -50 || echo "Failed to fetch TA entity configuration"
+
+          # echo -e "\n=== Testing OP entity configuration endpoint ==="
+          # curl -s "$OP_URL/oidc/op/.well-known/openid-federation" | python3 -m json.tool | head -50 || echo "Failed to fetch OP entity configuration"
+
+          echo -e "\n=== All infrastructure verified and ready for test execution ==="
+
+      - name: Start collecting and logging test results
+        run: |
+          echo "Starting real-time test results monitoring..."
+
+          # Create artifacts directory on host
+          mkdir -p artifacts
+
+          # Start monitoring in background using Django management command
+          docker exec -d mig_backend python manage.py monitor_test_results \
+            ${{ env.SUITE_ID }} \
+            --output "/tmp/detailed_test_logs.txt" \
+            --poll-interval 3 \
+            --timeout 900 &
+
+          MONITOR_PID=$!
+          echo "Monitor started with PID: $MONITOR_PID"
+          echo "MONITOR_PID=$MONITOR_PID" >> $GITHUB_ENV
+
+      - name: Monitor test suite
+        run: |
+          echo "Monitoring suite ID: ${{ env.SUITE_ID }}"
+
+          # Suite is already running, just monitor status
+          for i in {1..30}; do
+            SUITE_RESPONSE=$(curl -s http://localhost:${{ env.BACKEND_PORT }}/api/suite/${{ env.SUITE_ID }}/ -H "Authorization: Bearer ${{ env.AUTH_TOKEN }}")
+            SUITE_STATUS=$(echo "$SUITE_RESPONSE" | grep -o '"status":"[^"]*' | head -1 | cut -d'"' -f4)
+            echo "Suite status: $SUITE_STATUS (attempt $i/30)"
+            [[ "$SUITE_STATUS" == "completed" || "$SUITE_STATUS" == "error" ]] && break
+            sleep 10
+          done
+
+          # Wait for monitor process to finish
+          if [[ -n "${{ env.MONITOR_PID }}" ]]; then
+            echo "Waiting for test results monitor to complete..."
+            wait ${{ env.MONITOR_PID }} 2>/dev/null || true
+            echo "Monitor process completed"
+            
+            # Copy log file from container to host
+            echo "Copying detailed test logs from container..."
+            docker cp mig_backend:/tmp/detailed_test_logs.txt artifacts/detailed_test_logs.txt || echo "Failed to copy log file"
+          fi
+
+          if [[ -n "${{ env.MIG_T_NAMESPACE }}" ]]; then
+            echo -e "\n=== Checking TA pod status ==="
+            kubectl get pods -n "${{ env.MIG_T_NAMESPACE }}" -l app=ta || echo "No TA pods found"
+
+            echo -e "\n=== Checking OP pod status ==="
+            kubectl get pods -n "${{ env.MIG_T_NAMESPACE }}" -l app=op || echo "No OP pods found"
+            
+            echo -e "\n=== Checking mig-t pod status ==="
+            kubectl get pods -n "${{ env.MIG_T_NAMESPACE }}" -l app=mig-t || echo "No mig-t pods found"
+            
+            echo -e "\n=== Checking mig-t pod logs (last 50 lines) ==="
+            MIG_T_POD=$(kubectl get pods -n "${{ env.MIG_T_NAMESPACE }}" -l app=mig-t -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+            if [[ -n "$MIG_T_POD" ]]; then
+              kubectl logs -n "${{ env.MIG_T_NAMESPACE }}" "$MIG_T_POD" --tail=50 || echo "Failed to get mig-t logs"
+            else
+              echo "No mig-t pod found to check logs"
+            fi
+          fi
+          
+          # Check if tests have any results
+          echo -e "\n=== Checking test status ==="
+          docker exec mig_backend python manage.py shell -c "
+          from migapi.models import Suite, Test
+          import sys
+          try:
+              suite = Suite.objects.get(pk=${{ env.SUITE_ID }})
+              tests = suite.tests.all()
+              print(f'Total tests: {tests.count()}')
+              statuses = {}
+              for test in tests:
+                  status = test.status
+                  statuses[status] = statuses.get(status, 0) + 1
+              print('Test statuses:')
+              for status, count in statuses.items():
+                  print(f'  {status}: {count}')
+              results_count = sum(1 for t in tests if t.results)
+              print(f'Tests with results: {results_count}/{tests.count()}')
+          except Exception as e:
+              print(f'Error: {e}', file=sys.stderr)
+              sys.exit(1)
+          "
+          
+          # Check if backend is reachable from Kubernetes
+          echo -e "\n=== Testing backend connectivity from Kubernetes ==="
+          if [[ -n "${{ env.MIG_T_NAMESPACE }}" ]]; then
+            MIG_T_POD=$(kubectl get pods -n "${{ env.MIG_T_NAMESPACE }}" -l app=mig-t -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+            if [[ -n "$MIG_T_POD" ]]; then
+              echo "Testing connection to backend from mig-t pod..."
+              kubectl exec -n "${{ env.MIG_T_NAMESPACE }}" "$MIG_T_POD" -c mig-t -- sh -c "curl -s -o /dev/null -w '%{http_code}' --connect-timeout 5 http://${{ env.NODE_IP }}:${{ env.BACKEND_PORT }}/health/ || echo 'Connection failed'" || echo "Could not test connectivity"
+              
+              echo "Checking MIGSAAS_BASE_URL environment variable in mig-t pod..."
+              kubectl exec -n "${{ env.MIG_T_NAMESPACE }}" "$MIG_T_POD" -c mig-t -- env | grep MIGSAAS || echo "MIGSAAS_BASE_URL not found in environment"
+            fi
+          fi
+
+      - name: Print test results
+        if: always()
+        run: |
+          echo "=== Printing test results for suite ${{ env.SUITE_ID }} ==="
+
+          # Get suite results via API
+          SUITE_DATA=$(curl -s http://localhost:${{ env.BACKEND_PORT }}/api/suite/${{ env.SUITE_ID }}/ \
+            -H "Authorization: Bearer ${{ env.AUTH_TOKEN }}")
+
+          # Extract and print results
+          echo "$SUITE_DATA" | python3 -c "
+          import sys, json
+          try:
+              data = json.load(sys.stdin)
+              results = data.get('results', [])
+              if results:
+                  print('Test Results Summary:')
+                  print('=' * 80)
+                  for result in results:
+                      status = result.get('status', 'unknown')
+                      test_name = result.get('test_name', 'Unknown test')
+                      test_id = result.get('test_id', 'N/A')
+                      duration = result.get('duration', 0)
+                      error_msg = result.get('error_message', '')
+
+                      print(f'Test ID: {test_id}')
+                      print(f'Name: {test_name}')
+                      print(f'Status: {status}')
+                      print(f'Duration: {duration:.3f}s')
+                      if error_msg:
+                          print(f'Error: {error_msg}')
+                      print('-' * 80)
+                  print(f'\nTotal tests: {len(results)}')
+                  passed = sum(1 for r in results if r.get('status') == 'passed')
+                  failed = sum(1 for r in results if r.get('status') == 'failed')
+                  print(f'Passed: {passed}')
+                  print(f'Failed: {failed}')
+              else:
+                  print('No results found for this suite.')
+          except Exception as e:
+              print(f'Error parsing results: {e}')
+              sys.exit(1)
+          " || echo "Failed to print test results"
+
+      - name: Upload detailed test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: detailed-test-logs-${{ github.run_id }}
+          path: artifacts/detailed_test_logs.txt
+          retention-days: 30
+
+      - name: Generate PDF report
+        if: always()
+        run: |
+          mkdir -p artifacts
+
+          echo "Generating PDF report for suite ${{ env.SUITE_ID }}..."
+
+          # Check suite status first
+          SUITE_STATUS=$(curl -s http://localhost:${{ env.BACKEND_PORT }}/api/suite/${{ env.SUITE_ID }}/ \
+            -H "Authorization: Bearer ${{ env.AUTH_TOKEN }}" | grep -o '"status":"[^"]*' | head -1 | cut -d'"' -f4)
+
+          echo "Suite status: $SUITE_STATUS"
+
+          if [[ "$SUITE_STATUS" != "completed" && "$SUITE_STATUS" != "error" ]]; then
+            echo "Cannot generate PDF: Suite is not in completed or error status (current: $SUITE_STATUS)"
+            exit 0
+          fi
+
+          # Download PDF and save HTTP status (endpoint requires POST method)
+          HTTP_STATUS=$(curl -s -w "%{http_code}" -o artifacts/suite_report.pdf \
+            -X POST http://localhost:${{ env.BACKEND_PORT }}/api/suite/${{ env.SUITE_ID }}/download/ \
+            -H "Authorization: Bearer ${{ env.AUTH_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d '{}')
+
+          echo "HTTP status: $HTTP_STATUS"
+
+          if [[ "$HTTP_STATUS" != "200" ]]; then
+            echo "Failed to generate PDF report (HTTP $HTTP_STATUS)"
+            if [[ -f "artifacts/suite_report.pdf" ]]; then
+              echo "Error response:"
+              cat artifacts/suite_report.pdf
+              rm artifacts/suite_report.pdf
+            fi
+            exit 1
+          fi
+
+          # Verify the file is actually a PDF
+          if [[ -f "artifacts/suite_report.pdf" ]]; then
+            FILE_TYPE=$(file -b artifacts/suite_report.pdf)
+            FILE_SIZE=$(wc -c < artifacts/suite_report.pdf)
+            echo "File type: $FILE_TYPE"
+            echo "File size: $FILE_SIZE bytes"
+
+            if [[ "$FILE_TYPE" == *"PDF"* ]]; then
+              echo "✓ PDF report generated successfully"
+            else
+              echo "✗ File is not a valid PDF. Content:"
+              head -c 500 artifacts/suite_report.pdf
+              exit 1
+            fi
+          else
+            echo "PDF report file not found"
+            exit 1
+          fi
+
+      - name: Upload PDF report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: suite-report-${{ github.run_id }}
+          path: artifacts/suite_report.pdf
+          retention-days: 30
+
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          docker compose -f docker-compose-local-template.yml logs
+          kubectl get pods --all-namespaces -o wide
+
+          for pod in $(kubectl get pods --all-namespaces -o jsonpath='{range .items[?(@.status.phase!="Running")]}{.metadata.namespace}/{.metadata.name}{" "}{end}'); do
+            ns=$(echo $pod | cut -d'/' -f1)
+            name=$(echo $pod | cut -d'/' -f2)
+            echo "=== Logs for $ns/$name ==="
+            kubectl logs -n $ns $name --tail=100 || true
+          done
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker compose -f docker-compose-local-template.yml down -v || true
+
+          # Clean up RP bootstrap
+          if [[ -d "rp-bootstrap" ]]; then
+            cd rp-bootstrap
+            docker compose down -v || true
+          fi
+
+          if [[ -d "mig-cluster-service" ]] && [[ -f "mig-cluster-service/cluster-service-local.template.yaml" ]]; then
+            cd mig-cluster-service
+            envsubst < cluster-service-local.template.yaml | kubectl delete -f - --ignore-not-found=true || true
+          fi
