@@ -32,6 +32,8 @@ jobs:
           git submodule sync --recursive
           git submodule update --init --recursive
           ls -la
+          ls -la frontend
+          ls -la backend
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
