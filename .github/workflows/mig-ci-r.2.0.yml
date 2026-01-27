@@ -113,6 +113,8 @@ jobs:
             }
           }
           EOF
+            echo "=== Third line of rp_config.json ==="
+            sed -n '5p' /tmp/rp_config.json
 
             docker cp /tmp/rp_config.json mig_backend:/tmp/rp_config.json
             docker cp .github/configuration/test_suite_filters.json mig_backend:/tmp/test_suite_filters.json
