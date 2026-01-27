@@ -92,14 +92,13 @@ jobs:
 
           [[ -z "$TOKEN" ]] && echo "Failed to get authentication token" && exit 1
 
-          SUITES=$(curl -s http://localhost:${{ env.BACKEND_PORT }}/api/suites/ -H "Authorization: Bearer $TOKEN")
-          SUITE_ID=$(echo "$SUITES" | grep -o '"id":[0-9]*' | head -1 | cut -d':' -f2)
 
-          if [[ -z "$SUITE_ID" ]]; then
-            echo "Creating test suite using Django management commands..."
+
+         
+          echo "Creating test suite using Django management commands..."
 
             # Create temporary configuration files
-            cat > /tmp/rp_config.json <<EOF
+          cat > /tmp/rp_config.json <<EOF
           {
             "protocol_selection": "oidfed",
             "oidfed_implementation": "oidc_spid_cie_django",
