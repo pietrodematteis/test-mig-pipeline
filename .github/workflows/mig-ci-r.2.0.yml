@@ -53,8 +53,7 @@ jobs:
           push: false
           load: true
           tags: bluetensor/mig-backend:20250915merge
-          cache-from: type=gha,scope=backend
-          cache-to: type=gha,mode=max,scope=backend
+          no-cache: true
 
       - name: Start Docker Compose services
         env:
