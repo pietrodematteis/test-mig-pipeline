@@ -1,10 +1,7 @@
-name: CI - Build and Deploy
+name: CI - Build and Deploy r 2.0
 
 on:
-  push:
-    branches: [main, development, merge-all]
-  pull_request:
-    branches: [main, development]
+  workflow_dispatch:
 
 env:
   NODE_IP: 127.0.0.1
@@ -21,15 +18,21 @@ env:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    environment: MIG
     permissions:
       contents: read
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          token: ${{ secrets.PAT_TOKEN }}
+      - name: Clone MIG repo
+        run: |
+          ls -la
+          git --version    
+          git clone -b r2.0 https://${{ secrets.REPO_USER }}:${{ secrets.MIG_TOKEN }}@gitlab.fbk.eu/st/project/micro-id-gym/mig2.0/mig-saas.git .
+          git config --global url."https://${{ secrets.REPO_USER }}:${{ secrets.MIG_TOKEN }}@gitlab.fbk.eu/".insteadOf "git@gitlab.fbk.eu:"
+          git submodule sync --recursive
+          git submodule update --init --recursive
+          ls -la
+          ls -la mig-backend
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -89,10 +92,14 @@ jobs:
 
           [[ -z "$TOKEN" ]] && echo "Failed to get authentication token" && exit 1
 
-          echo "Creating test suite using Django management commands..."
+          SUITES=$(curl -s http://localhost:${{ env.BACKEND_PORT }}/api/suites/ -H "Authorization: Bearer $TOKEN")
+          SUITE_ID=$(echo "$SUITES" | grep -o '"id":[0-9]*' | head -1 | cut -d':' -f2)
 
-          # Create temporary configuration files
-          cat > /tmp/rp_config.json <<EOF
+          if [[ -z "$SUITE_ID" ]]; then
+            echo "Creating test suite using Django management commands..."
+
+            # Create temporary configuration files
+            cat > /tmp/rp_config.json <<EOF
           {
             "protocol_selection": "oidfed",
             "oidfed_implementation": "oidc_spid_cie_django",
@@ -126,6 +133,10 @@ jobs:
             [[ -z "$SUITE_ID" ]] && echo "Failed to create suite" && exit 1
 
             echo "Suite created successfully with ID: $SUITE_ID"
+
+          else
+            echo "Using existing suite with ID: $SUITE_ID"
+          fi
 
           echo "SUITE_ID=$SUITE_ID" >> $GITHUB_ENV
           echo "AUTH_TOKEN=$TOKEN" >> $GITHUB_ENV
