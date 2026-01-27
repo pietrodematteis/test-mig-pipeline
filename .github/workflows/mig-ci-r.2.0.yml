@@ -10,7 +10,7 @@ env:
   JWT_SIGNING_KEY: ci-jwt-signing-key
   EMAIL_HOST_USER: test@example.com
   EMAIL_HOST_PASSWORD: test_password
-  BACKEND_PORT: 8100
+  BACKEND_PORT: 8000
   FRONTEND_PORT: 3000
   POSTGRES_PORT: 5432
   KUBECONFIG: /etc/rancher/k3s/k3s.yaml
