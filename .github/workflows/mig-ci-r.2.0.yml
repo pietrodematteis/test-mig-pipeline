@@ -76,18 +76,14 @@ jobs:
           kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=traefik -n kube-system --timeout=120s || true
           kubectl wait --for=condition=ready pod -l app=mig-cluster-service -n mig-cluster-service --timeout=120s || true
 
-            - name: Create test suite (always create)
+      - name: Create test suite
         run: |
-          set -euo pipefail
-
           timeout 180 bash -c 'until docker logs mig_backend 2>&1 | grep -q "Starting development server"; do sleep 3; done'
 
           docker exec mig_backend python manage.py shell -c "
           from django.contrib.auth import get_user_model;
           User = get_user_model();
-          User.objects.filter(username='admin').exists() or User.objects.create_superuser(
-              'admin', 'admin@example.com', 'admin123'
-          )
+          User.objects.filter(username='admin').exists() or User.objects.create_superuser('admin', 'admin@example.com', 'admin123')
           "
 
           TOKEN=$(curl -s -X POST http://localhost:${{ env.BACKEND_PORT }}/api/token/ \
@@ -96,52 +92,54 @@ jobs:
 
           [[ -z "$TOKEN" ]] && echo "Failed to get authentication token" && exit 1
 
-          # Genera rp_config.json SENZA heredoc
-          python3 - <<'PY'
-          import json, os
+          SUITES=$(curl -s http://localhost:${{ env.BACKEND_PORT }}/api/suites/ -H "Authorization: Bearer $TOKEN")
+          SUITE_ID=$(echo "$SUITES" | grep -o '"id":[0-9]*' | head -1 | cut -d':' -f2)
 
-          node_ip = os.environ.get("NODE_IP", "127.0.0.1")
+          if [[ -z "$SUITE_ID" ]]; then
+            echo "Creating test suite using Django management commands..."
 
-          rp_config = {
+            # Create temporary configuration files
+            cat > /tmp/rp_config.json <<EOF
+          {
             "protocol_selection": "oidfed",
             "oidfed_implementation": "oidc_spid_cie_django",
             "entity_selection": "relying_party",
             "relying_party_config": {
               "organization_name": "CI Test Organization",
-              "entity_url": f"http://{node_ip}:8001",
-              "url_login_page": f"http://{node_ip}:8001/oidc/rp/landing",
+              "entity_url": "http://${NODE_IP}:8001",
+              "url_login_page": "http://${NODE_IP}:8001/oidc/rp/landing",
               "contact_email": "ci-test@bluetensor.ai",
-              "public_federation_jwks": "...",
-              "x_key": "-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----"
+              "public_federation_jwks": "[{\"kty\": \"RSA\", \"e\": \"AQAB\", \"n\": \"6SDksa64IjBk7HNQC7x5C9nMARGaanfaUm3wC2WulwG_8a5aIy4CEwXN2LENkCyypODqWZcTAwCzWsiihVN9kDcEs7UNu-X1WokK252D7_DRY-FXI8AB3P0CxTngs0k-OjcmbxqVW2U8G56rJFp4G_CYA4vzBoAP_5skFBt-4a5lYJlBfJ2gJlE0vh4_46oyNuUT9kmKauR7npVSHjBUSxYyDELzoaPmvR7SkX4sJe0MK39HES6s4no9G7BraLp75eOwEQmHgEhESWscSOf_CmC5ALnzWJ3FcFhxgsuMkdjoU7bH09y8pdKs64kR2znxs-yIWrPFW8hJKnySc2fk8w\", \"kid\": \"wL_LmP8UjLVN-sAeoZ7KGEMJfBkFtbNLd24eDD9RGCs\"}]",
+              "x_key": "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA6SDksa64IjBk7HNQC7x5C9nMARGaanfaUm3wC2WulwG/8a5a\nIy4CEwXN2LENkCyypODqWZcTAwCzWsiihVN9kDcEs7UNu+X1WokK252D7/DRY+FX\nI8AB3P0CxTngs0k+OjcmbxqVW2U8G56rJFp4G/CYA4vzBoAP/5skFBt+4a5lYJlB\nfJ2gJlE0vh4/46oyNuUT9kmKauR7npVSHjBUSxYyDELzoaPmvR7SkX4sJe0MK39H\nES6s4no9G7BraLp75eOwEQmHgEhESWscSOf/CmC5ALnzWJ3FcFhxgsuMkdjoU7bH\n09y8pdKs64kR2znxs+yIWrPFW8hJKnySc2fk8wIDAQABAoIBADacNfZJb2jS3VFm\nUcHuDIzyIA/AB+QY31Of3TNORm+pQUVkCkljZaj/GxE/qGW1ksN8zGjgMtvpNhp2\nFVwWCrvVp4xRRT5Wx/rFT33SkC2MxAAZsUf2mnkh65w3yqM07RbGBILSP1qBhGsT\n6BND/g7NdU6fYfaL2TOPLAxpxHco6KZyzxGQUelYpz/8hdZHw4NJHCD5jNWXISKi\na50KaClnlU17RRRq1ajgGJpuMQXz+FPExIpm3iSbmJCfYCzZ0Q4PxQvmT1IgSF4o\nFmbBHicnr8pj/jR+Jat6LC4BTqtLKj8Ut85A8MfbVn0+VMqqwgqK7YkHdncSs8WZ\nRBL5UAECgYEA+1JcdcT2FdwavmPqtfOEKFUGBM9hhvwgX7KyCwl8tmresJQz8pND\nkILMeKJf8ZCDVU7v4/i4C/P8oe41f2/SDsv9AIYh09zu/tQsMMdH/lqNx0YP8Yv2\n5N5KOxnSOBO837SieFZ2xkbolXXIV7WIHrdFiyAOMOSWlETEO6JNu/MCgYEA7XfV\nt4ArSMLmRvvSl11yDF25t1aR3ylUmwZgLAJTNo76j+zo8Q2Ty7GfCIQmLOhOZTkw\nqnrbmwEBMEBsomWZFh/j90CLMyn1ccYUjiTI4CHJOTLMA8rYVWeArYkqek1jC4TQ\n9e1PkRrPcEvq2Tak8GFsBhnhOCzejJrMDgqkcwECgYBOt5JMNN/bIvChd4w5Z0ea\nll7nPMlQTUIal07a1CLixAByEElhDi0YY0+F7V3dvKTWIH5Uyj9jRw127rSE8NI7\nXjslYd3QjR+yY2Rf9tse2OAVbWVrA6rWLqXTcxf8BnqfGuXUiUh0fBs3TQfuKOa0\nsDSxCd5IBCEB2bQY9ZIhbwKBgQC6XfQiwbo2ro9fYj9SgAoD3oLkelKdW6iEyios\nH98C0I+g6QOgO1Gk6U+wtVXopKDyHEIvaaB0NAOkxMr9YNMWZAzbfZJBo0p38kcr\nj37/OETeWRl4WHgT/tkkWKQ3vAhhf+knOQnbDbmDnnE/6/zikvLeju0M01oN62b+\nFigeAQKBgGbhr8UI35VkY3ym6qc9qvbh8MzEt4mI85bFmohJNw2EbfgbGVTO+5zg\nUo6Xe2WhCVCY6KFoJUaSuuwTBzq82bpIdpafusAIN51zQ+A1zmnuj5YYKb7G4DCg\nEB8HDc3EmeMKhyIh+5hV+bBnK7PVJdrIw7AxDqABKdOOo1F7vxcF\n-----END RSA PRIVATE KEY-----"
             }
           }
+          EOF
 
-          with open("/tmp/rp_config.json", "w") as f:
-              json.dump(rp_config, f, indent=2)
+            docker cp /tmp/rp_config.json mig_backend:/tmp/rp_config.json
+            docker cp .github/configuration/test_suite_filters.json mig_backend:/tmp/test_suite_filters.json
 
-          print("rp_config.json written")
-          PY
+            # Create suite with all tests, sessions, and messages in one command
+            SUITE_OUTPUT=$(docker exec mig_backend python manage.py create_full_suite "CI_TEST_SUITE" "CI Integration Test Suite" \
+              --description "Automated test suite created with filtered tests from backend fixtures" \
+              --filter_messages \
+              --configurations /tmp/rp_config.json \
+              --filters /tmp/test_suite_filters.json \
+              --replace-rp-url "http://${NODE_IP}:8001" 2>&1)
 
-          docker cp /tmp/rp_config.json mig_backend:/tmp/rp_config.json
-          docker cp .github/configuration/test_suite_filters.json mig_backend:/tmp/test_suite_filters.json
+            echo "$SUITE_OUTPUT"
 
-          SUITE_OUTPUT=$(docker exec mig_backend python manage.py create_full_suite \
-            "CI_TEST_SUITE" \
-            "CI Integration Test Suite" \
-            --description "CI autogenerated suite" \
-            --filter_messages \
-            --configurations /tmp/rp_config.json \
-            --filters /tmp/test_suite_filters.json \
-            --replace-rp-url "http://${NODE_IP}:8001" 2>&1)
+            SUITE_ID=$(echo "$SUITE_OUTPUT" | grep -o 'Suite ID: [0-9]*' | grep -o '[0-9]*$')
 
-          echo "$SUITE_OUTPUT"
+            [[ -z "$SUITE_ID" ]] && echo "Failed to create suite" && exit 1
 
-          SUITE_ID=$(echo "$SUITE_OUTPUT" | grep -o 'Suite ID: [0-9]*' | grep -o '[0-9]*$')
-          [[ -z "$SUITE_ID" ]] && echo "Failed to create suite" && exit 1
+            echo "Suite created successfully with ID: $SUITE_ID"
+
+          else
+            echo "Using existing suite with ID: $SUITE_ID"
+          fi
 
           echo "SUITE_ID=$SUITE_ID" >> $GITHUB_ENV
           echo "AUTH_TOKEN=$TOKEN" >> $GITHUB_ENV
-
 
       - name: Deploy external RP
         run: |
