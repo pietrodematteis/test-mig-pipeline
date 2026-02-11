@@ -511,7 +511,7 @@ jobs:
       - name: Show logs on failure
         if: failure()
         run: |
-          docker compose -f docker-compose-local-template.yml logs
+          docker compose -f docker-compose-ci-template.yml logs
           kubectl get pods --all-namespaces -o wide
 
           for pod in $(kubectl get pods --all-namespaces -o jsonpath='{range .items[?(@.status.phase!="Running")]}{.metadata.namespace}/{.metadata.name}{" "}{end}'); do
@@ -524,7 +524,7 @@ jobs:
       - name: Cleanup
         if: always()
         run: |
-          docker compose -f docker-compose-local-template.yml down -v || true
+          docker compose -f docker-compose-ci-template.yml down -v || true
 
           # Clean up RP bootstrap
           if [[ -d "rp-bootstrap" ]]; then
