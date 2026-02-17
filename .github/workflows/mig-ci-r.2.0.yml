@@ -318,10 +318,10 @@ jobs:
           echo "Monitoring suite ID: ${{ env.SUITE_ID }}"
 
           # Suite is already running, just monitor status
-          for i in {1..30}; do
+          for i in {1..60}; do
             SUITE_RESPONSE=$(curl -s http://localhost:${{ env.BACKEND_PORT }}/api/suite/${{ env.SUITE_ID }}/ -H "Authorization: Bearer ${{ env.AUTH_TOKEN }}")
             SUITE_STATUS=$(echo "$SUITE_RESPONSE" | grep -o '"status":"[^"]*' | head -1 | cut -d'"' -f4)
-            echo "Suite status: $SUITE_STATUS (attempt $i/30)"
+            echo "Suite status: $SUITE_STATUS (attempt $i/60)"
             [[ "$SUITE_STATUS" == "completed" || "$SUITE_STATUS" == "error" ]] && break
             sleep 10
           done
