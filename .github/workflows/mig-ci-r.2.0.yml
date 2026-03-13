@@ -65,6 +65,7 @@ jobs:
       - name: Deploy cluster service to Kubernetes
         env:
           NODE_IP: ${{ env.NODE_IP }}
+          IMAGE_MIG_T: bluetensor/mig-t:2.9.46
         run: |
           if [[ ! -d "mig-cluster-service" ]] || [[ ! -f "mig-cluster-service/local-setup.sh" ]]; then
             echo "ERROR: mig-cluster-service directory or local-setup.sh not found"
@@ -76,7 +77,7 @@ jobs:
           [[ -z "$NODE_IP" ]] && echo "ERROR: NODE_IP is empty" && exit 1
           export SAAS_PORT=${{ env.BACKEND_PORT }}
           export MIG_SAAS_BASE_URL="${NODE_IP}:${{ env.BACKEND_PORT }}"
-
+          export IMAGE_MIG_T
           cd mig-cluster-service && bash local-setup.sh && cd ..
 
           kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=traefik -n kube-system --timeout=120s || true
