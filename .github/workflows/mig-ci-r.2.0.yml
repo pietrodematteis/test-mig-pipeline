@@ -35,7 +35,7 @@ jobs:
           ls -la backend
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Install and configure k3s
         run: |
@@ -46,7 +46,7 @@ jobs:
           echo "NODE_IP=$NODE_IP" >> $GITHUB_ENV
 
       - name: Build backend with cache
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: ./conf/backend/Dockerfile
@@ -468,7 +468,7 @@ jobs:
 
       - name: Upload detailed test logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: detailed-test-logs-${{ github.run_id }}
           path: |
@@ -534,7 +534,7 @@ jobs:
 
       - name: Upload PDF report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: suite-report-${{ github.run_id }}
           path: artifacts/suite_report.pdf
