@@ -75,10 +75,12 @@ jobs:
 
           # MIG_SAAS_BASE_URL must be host:port (no protocol); mig-t manifests add {{protocol}}://
           [[ -z "$NODE_IP" ]] && echo "ERROR: NODE_IP is empty" && exit 1
-          export SAAS_PORT=${{ env.BACKEND_PORT }}
-          export MIG_SAAS_BASE_URL="${NODE_IP}:${{ env.BACKEND_PORT }}"
+          # local-setup.sh fa source di cluster-config.env (SAAS_PORT=8000), quindi usiamo un file config CI dedicato.
+          cat > /tmp/cluster-config-ci.env <<EOF
+          SAAS_PORT=${{ env.BACKEND_PORT }}
+          EOF
           export IMAGE_MIG_T
-          cd mig-cluster-service && bash local-setup.sh && cd ..
+          cd mig-cluster-service && bash local-setup.sh local /tmp/cluster-config-ci.env && cd ..
 
           kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=traefik -n kube-system --timeout=120s || true
           kubectl wait --for=condition=ready pod -l app=mig-cluster-service -n mig-cluster-service --timeout=120s || true
