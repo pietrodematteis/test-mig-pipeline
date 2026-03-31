@@ -325,6 +325,8 @@ jobs:
         run: |
           echo "Monitoring suite ID: ${{ env.SUITE_ID }}"
 
+          mkdir -p artifacts/entity-logs
+
           # Suite is already running, just monitor status
           for i in {1..120}; do
             SUITE_RESPONSE=$(curl -s http://localhost:${{ env.BACKEND_PORT }}/api/suite/${{ env.SUITE_ID }}/ -H "Authorization: Bearer ${{ env.AUTH_TOKEN }}")
@@ -362,6 +364,24 @@ jobs:
             else
               echo "No mig-t pod found to check logs"
             fi
+
+            
+            echo -e "\n=== Collecting per-entity logs for artifacts ==="
+            for app in mig-t ta op rp; do
+              POD_NAMES=$(kubectl get pods -n "${{ env.MIG_T_NAMESPACE }}" -l "app=$app" -o jsonpath='{range .items[*]}{.metadata.name}{" "}{end}' 2>/dev/null || echo "")
+              if [[ -z "$POD_NAMES" ]]; then
+                echo "No pods found for app=$app"
+                continue
+              fi
+
+              for pod in $POD_NAMES; do
+                echo "Collecting logs for $pod (app=$app)"
+                kubectl logs -n "${{ env.MIG_T_NAMESPACE }}" "$pod" --all-containers=true --tail=-1 > "artifacts/entity-logs/${app}_${pod}.log" 2>&1 || echo "Failed to get logs for $pod" > "artifacts/entity-logs/${app}_${pod}.log"
+                kubectl describe pod -n "${{ env.MIG_T_NAMESPACE }}" "$pod" > "artifacts/entity-logs/${app}_${pod}.describe.txt" 2>&1 || true
+              done
+            done
+
+            kubectl get events -n "${{ env.MIG_T_NAMESPACE }}" --sort-by=.lastTimestamp > artifacts/entity-logs/events.txt 2>&1 || true
           fi
           
           # Check if tests have any results
@@ -449,7 +469,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: detailed-test-logs-${{ github.run_id }}
-          path: artifacts/detailed_test_logs.txt
+          path: |
+            artifacts/detailed_test_logs.txt
+            artifacts/entity-logs/**
           retention-days: 30
 
       - name: Generate PDF report
